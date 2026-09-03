@@ -146,6 +146,67 @@ def test_handoff_payload_structure(tmp_path):
     assert loaded["fingerprint"] == payload["fingerprint"]
 
 
+def test_serpapi_response_parsing():
+    """Verify parsing of actual SerpAPI Google Lens response structure."""
+    from search.lens import GoogleLensSearcher
+
+    mock_serpapi_data = {
+        "search_metadata": {"status": "Success"},
+        "visual_matches": [
+            {
+                "position": 1,
+                "title": "Hrithik Roshan Instagram Reel",
+                "link": "https://www.instagram.com/reel/xyz123/",
+                "source": "Instagram",
+                "thumbnail": "https://encrypted-tbn0.gstatic.com/image?q=test1",
+            },
+            {
+                "position": 2,
+                "title": "Hrithik Roshan Facebook Post",
+                "link": "https://www.facebook.com/posts/456",
+                "source": "Facebook",
+                "thumbnail": "https://encrypted-tbn0.gstatic.com/image?q=test2",
+            },
+        ],
+        "knowledge_graph": {
+            "title": "Hrithik Roshan",
+            "link": "https://en.wikipedia.org/wiki/Hrithik_Roshan",
+            "source": "Wikipedia",
+        },
+    }
+
+    searcher = GoogleLensSearcher(api_key="test_key")
+    result = searcher._parse_lens_response(mock_serpapi_data, "https://example.com/test.jpg")
+
+    assert result.total_results == 3
+    # Check knowledge graph extracted
+    assert any(c.source == "Wikipedia" and "wikipedia.org" in c.post_url for c in result.candidates)
+    # Check visual matches extracted
+    insta_cand = next(c for c in result.candidates if c.source == "Instagram")
+    assert insta_cand.title == "Hrithik Roshan Instagram Reel"
+    assert insta_cand.post_url == "https://www.instagram.com/reel/xyz123/"
+
+
+def test_no_match_handoff_behavior():
+    """Verify that when 0 matches are found, no false fingerprint is generated."""
+    input_info = {"filename": "unknown.jpg", "face_detected": True, "face_count": 1}
+    search_info = {"engine": "Google Lens via SerpAPI", "query_type": "reverse_image"}
+
+    payload = build_handoff_payload(
+        input_info=input_info,
+        search_info=search_info,
+        best_match=None,
+        all_candidates=[],
+        dry_run=False,
+    )
+
+    assert payload["search_status"] == "NO_MATCH"
+    assert payload["canonical_payload"] is None
+    assert payload["fingerprint"] is None
+    assert payload["blockchain_handoff"]["status"] == "no_match_found"
+    assert payload["blockchain_handoff"]["fingerprint_to_register"] is None
+
+
 if __name__ == "__main__":
     print("Running tests...")
     test_models_download()
@@ -154,6 +215,10 @@ if __name__ == "__main__":
     print("✓ Deterministic hashing validated")
     test_matcher_ranking()
     print("✓ Matcher ranking validated")
+    test_serpapi_response_parsing()
+    print("✓ SerpAPI parser validated")
+    test_no_match_handoff_behavior()
+    print("✓ No-match handoff behavior validated")
     import tempfile
     test_handoff_payload_structure(Path(tempfile.gettempdir()))
     print("✓ Handoff payload validated")

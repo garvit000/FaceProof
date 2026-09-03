@@ -264,21 +264,26 @@ def run_pipeline(
     )
 
     fingerprint = final_payload["fingerprint"]
-    print_success("Deterministic SHA-256 generated")
-
-    console.print(
-        Panel(
-            f"[bold green]{fingerprint}[/bold green]",
-            title="Cryptographic Fingerprint (SHA-256)",
-            border_style="green",
-            expand=False,
-        )
-    )
-
-    # Save output to JSON
     out_file = save_result_payload(final_payload, output_path=output_path)
-    print_success(f"Pipeline complete → [bold cyan]{out_file}[/bold cyan] saved")
-    print_success("Ready for blockchain integration handoff")
+
+    if fingerprint:
+        console.print("\n[bold green][SEARCH SUCCESS + MATCH FOUND][/bold green]")
+        print_success(f"Deterministic SHA-256 fingerprint generated")
+        console.print(
+            Panel(
+                f"[bold green]{fingerprint}[/bold green]",
+                title="Cryptographic Fingerprint (SHA-256)",
+                border_style="green",
+                expand=False,
+            )
+        )
+        print_success(f"Pipeline complete → [bold cyan]{out_file}[/bold cyan] saved")
+        print_success("Ready for blockchain integration handoff")
+    else:
+        console.print("\n[bold yellow][SEARCH SUCCESS + NO MATCH][/bold yellow]")
+        print_warning("No matching web or social media post was discovered for this face.")
+        print_warning("Blockchain fingerprint generation skipped (a verifiable match is required before generating a blockchain record).")
+        print_success(f"Search record saved → [bold cyan]{out_file}[/bold cyan]")
 
     return 0
 

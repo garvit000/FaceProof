@@ -10,18 +10,14 @@ from typing import Any, Dict, List, Optional, Union
 from .hashing import generate_sha256_fingerprint, serialize_deterministic_json
 
 
-def build_canonical_payload(match_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def build_canonical_payload(match_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
     Extract immutable discovered content metadata into a clean dictionary for deterministic hashing.
     Excludes volatile fields like execution timestamps to ensure reproducibility.
+    Returns None if no candidate match was discovered.
     """
     if not match_data:
-        return {
-            "source": "None",
-            "post_url": "",
-            "title": "No match found",
-            "status": "unverified",
-        }
+        return None
 
     payload = {
         "source": str(match_data.get("source", "")),
@@ -47,32 +43,16 @@ def build_handoff_payload(
 ) -> Dict[str, Any]:
     """
     Construct the complete structured output payload for FaceProof.
-
-    Args:
-        input_info: Details about the input image and detected faces.
-        search_info: Details about the search query and engine.
-        best_match: Selected best match candidate dictionary.
-        all_candidates: List of all evaluated candidates.
-        crop_path: Path to the processed face crop.
-        dry_run: Boolean indicating if this was a dry-run execution.
-
-    Returns:
-        Structured Python dictionary ready for saving to output/result.json.
+    Clearly distinguishes between SEARCH SUCCESS + MATCH FOUND and SEARCH SUCCESS + NO MATCH.
     """
     # Build the immutable canonical payload for hashing
     canonical_payload = build_canonical_payload(best_match)
-    fingerprint = generate_sha256_fingerprint(canonical_payload)
+    fingerprint = generate_sha256_fingerprint(canonical_payload) if canonical_payload else None
 
-    result = {
-        "faceproof_version": "1.0.0",
-        "dry_run": dry_run,
-        "input": input_info,
-        "search": search_info,
-        "match": best_match,
-        "all_candidates": all_candidates,
-        "canonical_payload": canonical_payload,
-        "fingerprint": fingerprint,
-        "blockchain_handoff": {
+    if best_match and canonical_payload and fingerprint:
+        handoff_status = "ready_for_registration"
+        handoff_block = {
+            "status": handoff_status,
             "fingerprint_to_register": fingerprint,
             "hash_algorithm": "SHA-256",
             "canonical_payload_json": serialize_deterministic_json(canonical_payload),
@@ -82,7 +62,29 @@ def build_handoff_payload(
                 "To re-verify at any future time: compute SHA-256 over 'canonical_payload' "
                 "using deterministic JSON serialization and compare against the on-chain hash."
             ),
-        },
+        }
+    else:
+        handoff_status = "no_match_found"
+        handoff_block = {
+            "status": handoff_status,
+            "fingerprint_to_register": None,
+            "instructions": (
+                "Search pipeline completed, but zero verified candidate matches were found. "
+                "Blockchain registration is not applicable when no match is discovered."
+            ),
+        }
+
+    result = {
+        "faceproof_version": "1.0.0",
+        "dry_run": dry_run,
+        "search_status": "MATCH_FOUND" if best_match else "NO_MATCH",
+        "input": input_info,
+        "search": search_info,
+        "match": best_match,
+        "all_candidates": all_candidates,
+        "canonical_payload": canonical_payload,
+        "fingerprint": fingerprint,
+        "blockchain_handoff": handoff_block,
     }
 
     if crop_path:

@@ -67,62 +67,64 @@ class LensSearchError(Exception):
 def upload_image_to_temp_host(image_path: Union[str, Path], timeout: int = 15) -> str:
     """
     Upload a local image to a temporary host so it can be queried by Google Lens API.
-    Uses public ephemeral file hosting services (tmpfiles.org or 0x0.st).
+    Ensures the returned URL directly serves the binary image (image/* Content-Type),
+    not an HTML landing page.
     """
     path = Path(image_path)
     if not path.exists():
         raise FileNotFoundError(f"Local image file not found: {path}")
 
-    # Try tmpfiles.org first
+    # Method 1: FreeImage.host (very reliable, permanent CDN image link)
     try:
         with open(path, "rb") as f:
             resp = requests.post(
-                "https://tmpfiles.org/api/v1/upload",
-                files={"file": (path.name, f, "image/jpeg")},
+                "https://freeimage.host/api/1/upload",
+                data={"key": "6d207e02198a847aa98d0a2a901485a5", "action": "upload", "format": "json"},
+                files={"source": (path.name, f, "image/jpeg")},
                 timeout=timeout,
             )
             if resp.status_code == 200:
                 data = resp.json()
-                if data.get("status") == "success":
-                    raw_url = data["data"]["url"]
-                    # Convert to direct download URL (tmpfiles.org/dl/...)
-                    direct_url = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                    return direct_url
+                img_url = data.get("image", {}).get("url")
+                if img_url:
+                    return img_url
     except Exception:
         pass
 
-    # Fallback to 0x0.st
+    # Method 2: Uguu.se (fast, ephemeral 48h direct image hosting)
     try:
         with open(path, "rb") as f:
             resp = requests.post(
-                "https://0x0.st",
-                files={"file": (path.name, f, "image/jpeg")},
+                "https://uguu.se/upload",
+                files={"files[]": (path.name, f, "image/jpeg")},
                 timeout=timeout,
             )
             if resp.status_code == 200:
+                data = resp.json()
+                if data.get("success") and data.get("files"):
+                    direct_url = data["files"][0].get("url")
+                    if direct_url:
+                        return direct_url
+    except Exception:
+        pass
+
+    # Method 3: Litterbox (Catbox temporary hosting)
+    try:
+        with open(path, "rb") as f:
+            resp = requests.post(
+                "https://litterbox.catbox.moe/resources/internals/api.php",
+                data={"reqtype": "fileupload", "time": "1h"},
+                files={"fileToUpload": (path.name, f, "image/jpeg")},
+                timeout=timeout,
+            )
+            if resp.status_code == 200 and resp.text.startswith("http"):
                 return resp.text.strip()
-    except Exception:
-        pass
-
-    # Fallback to file.io
-    try:
-        with open(path, "rb") as f:
-            resp = requests.post(
-                "https://file.io",
-                files={"file": (path.name, f, "image/jpeg")},
-                data={"expires": "1d"},
-                timeout=timeout,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("success"):
-                    return data["link"]
     except Exception:
         pass
 
     raise LensSearchError(
         "Could not automatically stage local image for SerpAPI. "
-        "Please provide a direct public image URL or verify your internet connection."
+        "Please provide a direct public image URL via --image or check your internet connection."
     )
 
 
@@ -198,6 +200,20 @@ class GoogleLensSearcher:
         except Exception as e:
             raise LensSearchError(f"Failed to parse SerpAPI JSON response: {e}")
 
+        # Save sanitized debug response
+        try:
+            import copy
+            import json
+            debug_data = copy.deepcopy(data)
+            if "search_parameters" in debug_data and "api_key" in debug_data["search_parameters"]:
+                debug_data["search_parameters"]["api_key"] = "[REDACTED]"
+            debug_path = Path("output/debug_lens_response.json")
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(debug_path, "w", encoding="utf-8") as f:
+                json.dump(debug_data, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
         if "error" in data:
             raise LensSearchError(f"SerpAPI error: {data['error']}")
 
@@ -237,6 +253,25 @@ class GoogleLensSearcher:
                         position=position,
                         snippet=snippet,
                         raw_data=match,
+                    )
+                )
+
+        # Also extract from knowledge_graph if available
+        if "knowledge_graph" in data and isinstance(data["knowledge_graph"], dict):
+            kg = data["knowledge_graph"]
+            kg_link = kg.get("link") or kg.get("website")
+            if kg_link and not any(c.post_url == kg_link for c in candidates):
+                candidates.insert(
+                    0,
+                    LensCandidate(
+                        title=kg.get("title", "Knowledge Graph Entry"),
+                        post_url=kg_link,
+                        source=kg.get("source", "Knowledge Graph"),
+                        image_url=kg.get("thumbnail") or kg.get("header_images", [{}])[0].get("image") if isinstance(kg.get("header_images"), list) and kg.get("header_images") else None,
+                        thumbnail_url=kg.get("thumbnail"),
+                        position=0,
+                        snippet=kg.get("description"),
+                        raw_data=kg,
                     )
                 )
 
